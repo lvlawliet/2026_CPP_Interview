@@ -243,93 +243,53 @@ malloc(0) 返回什么？
 如何自己实现一个简易 new/delete？  
 ``` cpp
 #include <iostream>
-#include <cstdlib> // 包含 malloc 和 free
-#include <new>     // 包含 placement new
+#include <new>       // ::operator new + placement new
+#include <utility>   // std::forward
 
-// 模拟 New，包含内存分配和构造函数调用
+// ====================== 模拟 new（正确版 + 日志） ======================
 template <typename T, typename... Args>
 T* myNew(Args&&... args) {
-    // 1. 分配内存
-    void* ptr = std::malloc(sizeof(T));
-    if (!ptr) return nullptr;
-
-    // 2. 调用构造函数 (使用 placement new)
-    return new (ptr) T(std::forward<Args>(args)...);
+    std::cout << "[myNew] 第1步: ::operator new 只分配内存（" << sizeof(T) << "字节），不构造\n";
+    
+    void* ptr = ::operator new(sizeof(T));   // 纯分配
+    
+    try {
+        std::cout << "[myNew] 第2步: placement new 调用构造函数\n";
+        return new (ptr) T(std::forward<Args>(args)...);
+    } catch (...) {
+        ::operator delete(ptr);
+        throw;
+    }
 }
 
-// 模拟 Delete，包含析构函数调用和内存释放
+// ====================== 模拟 delete ======================
 template <typename T>
 void myDelete(T* ptr) {
     if (!ptr) return;
-
-    // 1. 调用析构函数
+    std::cout << "[myDelete] 调用析构函数\n";
     ptr->~T();
-
-    // 2. 释放内存
-    std::free(ptr);
+    std::cout << "[myDelete] ::operator delete 释放内存\n";
+    ::operator delete(ptr);
 }
 
-// 测试类
+// ====================== 测试类 ======================
 class MyClass {
 public:
-    MyClass(int v) : val(v) { std::cout << "Constructor, val: " << val << std::endl; }
-    ~MyClass() { std::cout << "Destructor, val: " << val << std::endl; }
+    MyClass(int v) : val(v) {
+        std::cout << "【Constructor】val = " << val << std::endl;
+    }
+    ~MyClass() {
+        std::cout << "【Destructor】val = " << val << std::endl;
+    }
     int val;
 };
 
 int main() {
-    // 使用自定义的 new
-    MyClass* obj = myNew<MyClass>(10);
-    std::cout << "Object value: " << obj->val << std::endl;
-
-    // 使用自定义的 delete
+    std::cout << "=== 开始测试 ===\n";
+    MyClass* obj = myNew<MyClass>(42);
+    std::cout << "对象已创建，val = " << obj->val << "\n\n";
+    
     myDelete(obj);
-
-    return 0;
-}
-#include <iostream>
-#include <cstdlib> // 包含 malloc 和 free
-#include <new>     // 包含 placement new
-
-// 模拟 New，包含内存分配和构造函数调用
-template <typename T, typename... Args>
-T* myNew(Args&&... args) {
-    // 1. 分配内存
-    void* ptr = std::malloc(sizeof(T));
-    if (!ptr) return nullptr;
-
-    // 2. 调用构造函数 (使用 placement new)
-    return new (ptr) T(std::forward<Args>(args)...);
-}
-
-// 模拟 Delete，包含析构函数调用和内存释放
-template <typename T>
-void myDelete(T* ptr) {
-    if (!ptr) return;
-
-    // 1. 调用析构函数
-    ptr->~T();
-
-    // 2. 释放内存
-    std::free(ptr);
-}
-
-// 测试类
-class MyClass {
-public:
-    MyClass(int v) : val(v) { std::cout << "Constructor, val: " << val << std::endl; }
-    ~MyClass() { std::cout << "Destructor, val: " << val << std::endl; }
-    int val;
-};
-
-int main() {
-    // 使用自定义的 new
-    MyClass* obj = myNew<MyClass>(10);
-    std::cout << "Object value: " << obj->val << std::endl;
-
-    // 使用自定义的 delete
-    myDelete(obj);
-
     return 0;
 }
 
@@ -341,3 +301,4 @@ auto p = std::make_unique<Test>();     // 独占
 auto sp = std::make_shared<Test>();    // 共享
 auto arr = std::make_unique<Test[]>(5); // C++14+ 支持数组
 ```
+
