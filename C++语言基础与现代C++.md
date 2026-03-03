@@ -300,5 +300,90 @@ int main() {
 auto p = std::make_unique<Test>();     // 独占
 auto sp = std::make_shared<Test>();    // 共享
 auto arr = std::make_unique<Test[]>(5); // C++14+ 支持数组
-```
+```  
+## 内存对齐  
+### 1.为什么需要内存对齐？  
+CPU 访问内存不是按字节，而是按字长（Word）读取：  
+  
+32位系统：一次读 4 字节  
+64位系统：一次读 8 字节  
+  
+不对齐会导致：  
+  
+多次内存访问（性能下降 2~4 倍）  
+跨缓存行（Cache Line，通常 64 字节）→ 伪共享（False Sharing）  
+硬件异常（某些架构如 ARM 会直接崩溃）  
+  
+Padding：编译器自动在结构体成员之间插入无用字节，让每个成员的起始地址都是其对齐倍数。  
+### 2. 对齐规则（C++ 标准 + 编译器实现）  
+  
+基本类型对齐值 = sizeof(类型)（或平台字长）  
+char / bool：1 字节  
+short：2 字节  
+int / float：4 字节（32/64位通常都是 4）  
+long / double / 指针：8 字节（64位）  
+  
+结构体成员对齐：每个成员的偏移量（offset）必须是自身对齐值的整数倍。  
+结构体整体对齐：sizeof(struct) 是最大成员对齐值的整数倍（方便数组）。  
+Padding 插入位置：  
+成员之间（前置 padding）  
+结构体末尾（尾部 padding）  
+### 3.控制对齐的方式  
+| 方式                          | 作用                          | 示例                                              | 备注                              |
+|-------------------------------|-------------------------------|---------------------------------------------------|-----------------------------------|
+| **默认**                      | 自然对齐（编译器默认行为）    | `struct S { ... };`                               | 推荐，大多数场景直接使用          |
+| `#pragma pack(n)`             | 设置最大对齐值为 n            | `#pragma pack(1)` → 无 padding                    | 仅 MSVC / GCC / Clang 支持        |
+| `__attribute__((packed))`     | 完全取消所有 padding          | `struct __attribute__((packed)) S {}`             | GCC / Clang 专有                  |
+| `alignas(n)`                  | 强制结构体/成员对齐到 n 字节  | `struct alignas(16) S {};`<br>`alignas(64) int x;` | **C++11 标准**，最推荐的现代写法  |
+| `alignof(T)`                  | 查询类型的对齐值              | `static_assert(alignof(int) == 4);`               | **C++11 标准**，编译期常量        |
+### 4.其他知识点  
+数组对齐：struct S arr[10]; → 每个元素按 struct 对齐，整体大小是 sizeof(S) * 10  
+继承与虚函数：  
+虚表指针（vptr）通常 8 字节，对齐 8  
+基类 padding 会影响派生类  
+C++17+ 新特性：  
+std::aligned_storage  
+std::align  
+std::hardware_destructive_interference_size（64 字节）  
+### 5.False Sharing  
+现代 CPU Cache Line 大小通常是 64 字节（L1/L2/L3 缓存的最小单位）。  
+当一个核心修改某个变量时，整个 64 字节缓存行会被标记为 Dirty（脏）。  
+其他核心如果也要访问同一个缓存行里的任意字节，就会触发 Cache Invalidation（失效） + 跨核同步。  
+结果：即使变量完全独立，也会像“真共享”一样互相干扰。  
+真实代码对比  
+有 False Sharing（性能极差）  
+``` cpp
+struct BadCounter {
+    int counter1 = 0;
+    int counter2 = 0;
+};
 
+BadCounter g;
+
+void thread1() {
+    for (long i = 0; i < 100000000; ++i) g.counter1++;
+}
+
+void thread2() {
+    for (long i = 0; i < 100000000; ++i) g.counter2++;
+}
+```
+解决：手动 Padding  
+``` cpp
+struct GoodCounter {
+    int counter1 = 0;
+    char padding[60];     // 手动补到 64 字节
+    int counter2 = 0;
+};
+```
+现代 C++17+ 最佳写法
+``` cpp
+#include <atomic>
+#include <new>   // std::hardware_destructive_interference_size
+
+struct PerfectCounter {
+    alignas(std::hardware_destructive_interference_size) std::atomic<int> counter1{0};
+    alignas(std::hardware_destructive_interference_size) std::atomic<int> counter2{0};
+};
+```
+std::hardware_destructive_interference_size 就是当前平台真实的 Cache Line 大小（通常 64 或 128）  
